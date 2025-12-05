@@ -1,4 +1,6 @@
 import { chromium, Page, Locator, Browser, BrowserContext } from '@playwright/test';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 interface ElementInfo {
   tagName: string;
@@ -34,10 +36,38 @@ interface AnalyzedPage {
   others: AnalyzedElement[];
 }
 
+interface GeneratorOptions {
+  screenshot?: boolean;
+  screenshotPath?: string;
+  jsonOutput?: boolean;
+  verbose?: boolean;
+}
+
+interface PageObjectMetadata {
+  url: string;
+  pageName: string;
+  generatedAt: string;
+  elementCount: number;
+  elements: AnalyzedElement[];
+  screenshotPath?: string;
+}
+
+interface DiffResult {
+  added: AnalyzedElement[];
+  removed: AnalyzedElement[];
+  modified: Array<{ old: AnalyzedElement; new: AnalyzedElement }>;
+  unchanged: AnalyzedElement[];
+}
+
 class PageObjectGenerator {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private page: Page | null = null;
+  private options: GeneratorOptions;
+
+  constructor(options: GeneratorOptions = {}) {
+    this.options = options;
+  }
 
   async initialize(): Promise<void> {
     this.browser = await chromium.launch({ headless: true });
@@ -55,15 +85,56 @@ class PageObjectGenerator {
     await this.page.goto(url, { waitUntil: 'networkidle' });
   }
 
-  async generateFromPage(pageName: string): Promise<string> {
+  async captureScreenshot(outputPath?: string): Promise<string> {
     if (!this.page) throw new Error('Page not initialized');
-    const elements = await this.analyzePageElements();
-    return this.generateTemplate(pageName, elements);
+    const screenshotPath = outputPath || `screenshot-${Date.now()}.png`;
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    if (this.options.verbose) {
+      console.log(`Screenshot saved to: ${screenshotPath}`);
+    }
+    return screenshotPath;
   }
 
-  async generateFromUrl(url: string, pageName: string): Promise<string> {
+  async generateFromPage(pageName: string, url: string): Promise<{ code: string; metadata: PageObjectMetadata }> {
+    if (!this.page) throw new Error('Page not initialized');
+    const elements = await this.analyzePageElements();
+    
+    let screenshotPath: string | undefined;
+    if (this.options.screenshot) {
+      screenshotPath = await this.captureScreenshot(this.options.screenshotPath);
+    }
+
+    const allElements = this.flattenElements(elements);
+    const metadata: PageObjectMetadata = {
+      url,
+      pageName,
+      generatedAt: new Date().toISOString(),
+      elementCount: allElements.length,
+      elements: allElements,
+      screenshotPath,
+    };
+
+    const code = this.generateTemplate(pageName, elements);
+    return { code, metadata };
+  }
+
+  async generateFromUrl(url: string, pageName: string): Promise<{ code: string; metadata: PageObjectMetadata }> {
     await this.navigateToUrl(url);
-    return this.generateFromPage(pageName);
+    return this.generateFromPage(pageName, url);
+  }
+
+  private flattenElements(elements: AnalyzedPage): AnalyzedElement[] {
+    return [
+      ...elements.buttons,
+      ...elements.inputs,
+      ...elements.links,
+      ...elements.selects,
+      ...elements.checkboxes,
+      ...elements.radios,
+      ...elements.textareas,
+      ...elements.headings,
+      ...elements.others,
+    ];
   }
 
   private async analyzePageElements(): Promise<AnalyzedPage> {
@@ -81,12 +152,17 @@ class PageObjectGenerator {
       others: [],
     };
 
+    if (this.options.verbose) {
+      console.log('Analyzing page elements...');
+    }
+
     const buttonLocators = await this.page.getByRole('button').all();
     for (const locator of buttonLocators) {
       const info = await this.extractElementInfo(locator);
       const analyzed = this.createAnalyzedElement(info, 'button');
       if (analyzed) result.buttons.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.buttons.length} buttons`);
 
     const linkLocators = await this.page.getByRole('link').all();
     for (const locator of linkLocators) {
@@ -94,6 +170,7 @@ class PageObjectGenerator {
       const analyzed = this.createAnalyzedElement(info, 'link');
       if (analyzed) result.links.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.links.length} links`);
 
     const textboxLocators = await this.page.getByRole('textbox').all();
     for (const locator of textboxLocators) {
@@ -101,6 +178,7 @@ class PageObjectGenerator {
       const analyzed = this.createAnalyzedElement(info, 'input');
       if (analyzed) result.inputs.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.inputs.length} inputs`);
 
     const comboboxLocators = await this.page.getByRole('combobox').all();
     for (const locator of comboboxLocators) {
@@ -108,6 +186,7 @@ class PageObjectGenerator {
       const analyzed = this.createAnalyzedElement(info, 'select');
       if (analyzed) result.selects.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.selects.length} selects`);
 
     const checkboxLocators = await this.page.getByRole('checkbox').all();
     for (const locator of checkboxLocators) {
@@ -115,6 +194,7 @@ class PageObjectGenerator {
       const analyzed = this.createAnalyzedElement(info, 'checkbox');
       if (analyzed) result.checkboxes.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.checkboxes.length} checkboxes`);
 
     const radioLocators = await this.page.getByRole('radio').all();
     for (const locator of radioLocators) {
@@ -122,6 +202,7 @@ class PageObjectGenerator {
       const analyzed = this.createAnalyzedElement(info, 'radio');
       if (analyzed) result.radios.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.radios.length} radios`);
 
     const headingLocators = await this.page.getByRole('heading').all();
     for (const locator of headingLocators) {
@@ -129,6 +210,7 @@ class PageObjectGenerator {
       const analyzed = this.createAnalyzedElement(info, 'heading');
       if (analyzed) result.headings.push(analyzed);
     }
+    if (this.options.verbose) console.log(`  Found ${result.headings.length} headings`);
 
     return result;
   }
@@ -450,51 +532,250 @@ export class ${className} {
   }
 }
 
+class PageObjectDiff {
+  static compare(oldMetadata: PageObjectMetadata, newMetadata: PageObjectMetadata): DiffResult {
+    const oldElements = new Map(oldMetadata.elements.map(e => [e.name, e]));
+    const newElements = new Map(newMetadata.elements.map(e => [e.name, e]));
+
+    const added: AnalyzedElement[] = [];
+    const removed: AnalyzedElement[] = [];
+    const modified: Array<{ old: AnalyzedElement; new: AnalyzedElement }> = [];
+    const unchanged: AnalyzedElement[] = [];
+
+    for (const [name, newEl] of newElements) {
+      const oldEl = oldElements.get(name);
+      if (!oldEl) {
+        added.push(newEl);
+      } else if (oldEl.locatorCode !== newEl.locatorCode) {
+        modified.push({ old: oldEl, new: newEl });
+      } else {
+        unchanged.push(newEl);
+      }
+    }
+
+    for (const [name, oldEl] of oldElements) {
+      if (!newElements.has(name)) {
+        removed.push(oldEl);
+      }
+    }
+
+    return { added, removed, modified, unchanged };
+  }
+
+  static formatDiff(diff: DiffResult): string {
+    const lines: string[] = [];
+
+    if (diff.added.length > 0) {
+      lines.push('Added elements:');
+      for (const el of diff.added) {
+        lines.push(`  + ${el.name} (${el.locatorType})`);
+      }
+    }
+
+    if (diff.removed.length > 0) {
+      lines.push('Removed elements:');
+      for (const el of diff.removed) {
+        lines.push(`  - ${el.name} (${el.locatorType})`);
+      }
+    }
+
+    if (diff.modified.length > 0) {
+      lines.push('Modified elements:');
+      for (const { old, new: newEl } of diff.modified) {
+        lines.push(`  ~ ${old.name}:`);
+        lines.push(`    old: ${old.locatorCode}`);
+        lines.push(`    new: ${newEl.locatorCode}`);
+      }
+    }
+
+    if (lines.length === 0) {
+      lines.push('No changes detected.');
+    } else {
+      lines.unshift(`Summary: +${diff.added.length} -${diff.removed.length} ~${diff.modified.length}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  static hasChanges(diff: DiffResult): boolean {
+    return diff.added.length > 0 || diff.removed.length > 0 || diff.modified.length > 0;
+  }
+}
+
+function parseArgs(args: string[]): {
+  command: string;
+  url?: string;
+  pageName?: string;
+  outputPath?: string;
+  options: GeneratorOptions;
+  metadataPath?: string;
+  compareWith?: string;
+} {
+  const options: GeneratorOptions = {};
+  let command = 'generate';
+  let url: string | undefined;
+  let pageName: string | undefined;
+  let outputPath: string | undefined;
+  let metadataPath: string | undefined;
+  let compareWith: string | undefined;
+
+  const positionalArgs: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--screenshot' || arg === '-s') {
+      options.screenshot = true;
+    } else if (arg === '--screenshot-path' && args[i + 1]) {
+      options.screenshotPath = args[++i];
+      options.screenshot = true;
+    } else if (arg === '--json' || arg === '-j') {
+      options.jsonOutput = true;
+    } else if (arg === '--verbose' || arg === '-v') {
+      options.verbose = true;
+    } else if (arg === '--metadata' || arg === '-m') {
+      metadataPath = args[++i];
+    } else if (arg === '--compare' || arg === '-c') {
+      compareWith = args[++i];
+      command = 'compare';
+    } else if (arg === 'generate' || arg === 'compare' || arg === 'diff') {
+      command = arg === 'diff' ? 'compare' : arg;
+    } else if (!arg.startsWith('-')) {
+      positionalArgs.push(arg);
+    }
+  }
+
+  if (command === 'generate' || command === 'compare') {
+    url = positionalArgs[0];
+    pageName = positionalArgs[1];
+    outputPath = positionalArgs[2];
+  }
+
+  return { command, url, pageName, outputPath, options, metadataPath, compareWith };
+}
+
+function printUsage(): void {
+  console.log(`
+Page Object Generator - Generate Playwright Page Objects from web pages
+
+Usage:
+  npx ts-node scripts/generate-page-object.ts [command] [options] <url> <pageName> [outputPath]
+
+Commands:
+  generate    Generate a Page Object from a URL (default)
+  compare     Compare current page with saved metadata for changes
+
+Options:
+  -s, --screenshot           Capture a screenshot of the page
+  --screenshot-path <path>   Path to save the screenshot
+  -j, --json                 Output metadata as JSON
+  -v, --verbose              Enable verbose output
+  -m, --metadata <path>      Save metadata to a JSON file
+  -c, --compare <path>       Compare with existing metadata file
+
+Examples:
+  # Basic generation
+  npx ts-node scripts/generate-page-object.ts https://example.com Login
+
+  # Generate with screenshot and save to file
+  npx ts-node scripts/generate-page-object.ts -s https://example.com Login ./pages/LoginPage.ts
+
+  # Generate with JSON metadata output
+  npx ts-node scripts/generate-page-object.ts -j -m ./metadata/login.json https://example.com Login
+
+  # Compare current page with saved metadata
+  npx ts-node scripts/generate-page-object.ts -c ./metadata/login.json https://example.com Login
+
+  # CI mode: detect changes and output JSON
+  npx ts-node scripts/generate-page-object.ts -j -v -c ./metadata/login.json https://example.com Login
+`);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  if (args.length < 2) {
-    console.log('Usage: npx ts-node scripts/generate-page-object.ts <url> <pageName> [outputPath]');
-    console.log('');
-    console.log('Arguments:');
-    console.log('  url        - The URL of the page to analyze');
-    console.log('  pageName   - The name for the generated Page Object class');
-    console.log('  outputPath - (Optional) Path to save the generated file');
-    console.log('');
-    console.log('Example:');
-    console.log('  npx ts-node scripts/generate-page-object.ts https://example.com Login');
-    console.log('  npx ts-node scripts/generate-page-object.ts https://example.com Login ./pages/LoginPage.ts');
+  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    printUsage();
+    process.exit(args.length === 0 ? 1 : 0);
+  }
+
+  const { command, url, pageName, outputPath, options, metadataPath, compareWith } = parseArgs(args);
+
+  if (command === 'generate' && (!url || !pageName)) {
+    console.error('Error: URL and page name are required for generation');
+    printUsage();
     process.exit(1);
   }
 
-  const [url, pageName, outputPath] = args;
-
-  const generator = new PageObjectGenerator();
+  const generator = new PageObjectGenerator(options);
 
   try {
-    console.log(`Initializing browser...`);
+    if (options.verbose) {
+      console.log('Initializing browser...');
+    }
     await generator.initialize();
 
-    console.log(`Navigating to ${url}...`);
-    const pageObjectCode = await generator.generateFromUrl(url, pageName);
+    if ((command === 'generate' || command === 'compare') && url && pageName) {
+      if (options.verbose) {
+        console.log(`Navigating to ${url}...`);
+      }
 
-    if (outputPath) {
-      const fs = await import('fs/promises');
-      const path = await import('path');
-      const dir = path.dirname(outputPath);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(outputPath, pageObjectCode, 'utf-8');
-      console.log(`Page Object saved to: ${outputPath}`);
-    } else {
-      console.log('\n--- Generated Page Object ---\n');
-      console.log(pageObjectCode);
+      const { code, metadata } = await generator.generateFromUrl(url, pageName);
+
+      if (compareWith) {
+        try {
+          const oldMetadataContent = await fs.readFile(compareWith, 'utf-8');
+          const oldMetadata: PageObjectMetadata = JSON.parse(oldMetadataContent);
+          const diff = PageObjectDiff.compare(oldMetadata, metadata);
+
+          if (options.jsonOutput) {
+            console.log(JSON.stringify({ diff, hasChanges: PageObjectDiff.hasChanges(diff) }, null, 2));
+          } else {
+            console.log('\n--- Page Object Changes ---\n');
+            console.log(PageObjectDiff.formatDiff(diff));
+          }
+
+          if (PageObjectDiff.hasChanges(diff)) {
+            process.exitCode = 2;
+          }
+        } catch (error) {
+          console.error(`Error reading comparison file: ${compareWith}`);
+          if (options.verbose) {
+            console.error(error);
+          }
+        }
+      }
+
+      if (metadataPath) {
+        const dir = path.dirname(metadataPath);
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+        if (options.verbose) {
+          console.log(`Metadata saved to: ${metadataPath}`);
+        }
+      }
+
+      if (options.jsonOutput && !compareWith) {
+        console.log(JSON.stringify(metadata, null, 2));
+      } else if (!compareWith) {
+        if (outputPath) {
+          const dir = path.dirname(outputPath);
+          await fs.mkdir(dir, { recursive: true });
+          await fs.writeFile(outputPath, code, 'utf-8');
+          console.log(`Page Object saved to: ${outputPath}`);
+        } else {
+          console.log('\n--- Generated Page Object ---\n');
+          console.log(code);
+        }
+      }
     }
   } catch (error) {
-    console.error('Error generating Page Object:', error);
+    console.error('Error:', error);
     process.exit(1);
   } finally {
     await generator.close();
   }
 }
+
+export { PageObjectGenerator, PageObjectDiff, PageObjectMetadata, AnalyzedElement, DiffResult };
 
 main();
