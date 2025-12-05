@@ -40,3 +40,33 @@ export {
   createOpenAIInterpreter,
   createOpenAIInterpreterWithConfig,
 } from './openai-interpreter';
+
+// MCP Client
+export {
+  PlaywrightMCPClient,
+  createMCPClient,
+  startMCPServer,
+} from './mcp-client';
+export type {
+  MCPConfig,
+  MCPToolResult,
+  AccessibilityNode,
+  MCPSnapshot,
+} from './mcp-client';
+
+// MCP Executor
+export {
+  MCPScenarioExecutor,
+  createMCPExecutor,
+} from './mcp-executor';
+export type { MCPExecutorConfig } from './mcp-executor';
+
+// MCP AI Element Finder
+export {
+  AIElementFinder,
+  createAIElementFinder,
+} from './mcp-ai-finder';
+export type {
+  AIFinderConfig,
+  ElementMatch,
+} from './mcp-ai-finder';
