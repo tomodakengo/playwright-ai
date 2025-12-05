@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "generate:page-object": "ts-node --project scripts/tsconfig.json scripts/generate-page-object.ts"
+    "generate:page-object": "ts-node --project scripts/tsconfig.json scripts/generate-page-object.ts",
+    "po:generate": "ts-node --project scripts/tsconfig.json scripts/generate-page-object.ts",
+    "po:record": "ts-node --project scripts/tsconfig.json scripts/generate-page-object.ts -j -m",
+    "po:check": "ts-node --project scripts/tsconfig.json scripts/generate-page-object.ts -j -v -c"
   },
   "dependencies": {
     "next": "16.0.7",
